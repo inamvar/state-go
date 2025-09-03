@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	state_go "github.com/inamvar/state-go"
-	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -15,7 +15,7 @@ type MyPayload struct {
 	Message string `json:"message"`
 }
 
-func exampleCallback(payload interface{}) (state_go.Status, interface{}, error) {
+func exampleCallback(ctx context.Context, payload interface{}) (state_go.Status, interface{}, error) {
 	p, ok := payload.(*MyPayload)
 	if !ok {
 		return state_go.StatusFailed, nil, errors.New("invalid payload type")
@@ -23,19 +23,19 @@ func exampleCallback(payload interface{}) (state_go.Status, interface{}, error) 
 
 	p.Counter++
 	fmt.Printf("Processing: Counter=%d, Message=%s\n", p.Counter, p.Message)
-
-	if p.Counter < 3 {
-		return state_go.StatusUnknown, p, nil // retry current state
-	}
-	if p.Message == "fail" {
-		return state_go.StatusFailed, p, nil
-	}
+	//
+	//if p.Counter < 3 {
+	//	return state_go.StatusUnknown, p, nil // retry current state
+	//}
+	//if p.Message == "fail" {
+	//	return state_go.StatusFailed, p, nil
+	//}
 
 	return state_go.StatusSuccess, p, nil
 }
 
 func main() {
-	dsn := "host=localhost user=postgres password=yourpass dbname=statemachine port=5432 sslmode=disable"
+	dsn := "host=localhost user=postgres password=boofhichkas dbname=statemachine port=5432 sslmode=disable"
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		panic(err)
@@ -48,17 +48,21 @@ func main() {
 
 	sm := state_go.NewStateMachine(db, 3)
 
-	sm.RegisterState(state_go.StateA, exampleCallback, map[state_go.Status]state_go.StateName{
-		state_go.StatusSuccess: state_go.StateB,
-		state_go.StatusFailed:  state_go.StateA,
-		state_go.StatusUnknown: state_go.StateA,
-	})
+	stateA := state_go.State{
+		Name:        "state_a",
+		ActionFunc:  exampleCallback,
+		Transitions: map[state_go.Status]string{"success": "state_b"},
+	}
 
-	sm.RegisterState(state_go.StateB, exampleCallback, map[state_go.Status]state_go.StateName{
-		state_go.StatusSuccess: state_go.StateEnd,
-		state_go.StatusFailed:  state_go.StateB,
-		state_go.StatusUnknown: state_go.StateEnd,
-	})
+	stateB := state_go.State{
+		Name:        "state_b",
+		ActionFunc:  exampleCallback,
+		Transitions: map[state_go.Status]string{},
+	}
+
+	sm.RegisterState(stateA)
+	sm.RegisterState(stateB)
+
 	initialPayload := MyPayload{Counter: 0, Message: "hello"}
 
 	payloadJSON, err := json.Marshal(initialPayload)
@@ -67,19 +71,18 @@ func main() {
 	}
 
 	job := state_go.Job{
-		CurrentState: state_go.StateA,
-		Payload:      datatypes.JSON(payloadJSON),
+		CurrentState: "state_a",
+		Payload:      state_go.Payload(payloadJSON),
 	}
 
-	if err := db.Create(&job).Error; err != nil {
+	if err = db.Create(&job).Error; err != nil {
 		panic(err)
 	}
+	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
-		err := sm.Run(job.ID, &MyPayload{})
-		if err != nil {
-			fmt.Println("Run error:", err)
-			break
-		}
+	err = sm.Run(ctx, job.ID, &MyPayload{})
+	if err != nil {
+		fmt.Println("Run error:", err)
 	}
+
 }

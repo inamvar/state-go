@@ -1,28 +1,32 @@
 package state_go
 
 import (
+	"context"
 	"gorm.io/gorm"
+	"sync"
 )
 
-type CallbackFunc func(payload interface{}) (Status, interface{}, error)
+type CallbackFunc func(ctx context.Context, payload interface{}) (Status, interface{}, error)
 
 type StateMachine struct {
-	db          *gorm.DB
-	callbacks   map[StateName]CallbackFunc
-	transitions map[StateName]map[Status]StateName
-	maxRetries  int
+	db         *gorm.DB
+	states     map[string]State
+	maxRetries int
+	mu         sync.RWMutex
 }
 
 func NewStateMachine(db *gorm.DB, maxRetries int) *StateMachine {
 	return &StateMachine{
-		db:          db,
-		callbacks:   make(map[StateName]CallbackFunc),
-		transitions: make(map[StateName]map[Status]StateName),
-		maxRetries:  maxRetries,
+		db:         db,
+		states:     make(map[string]State),
+		maxRetries: maxRetries,
+		mu:         sync.RWMutex{},
 	}
 }
 
-func (sm *StateMachine) RegisterState(state StateName, callback CallbackFunc, transitions map[Status]StateName) {
-	sm.callbacks[state] = callback
-	sm.transitions[state] = transitions
+func (sm *StateMachine) RegisterState(state State) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.states[state.Name] = state
+
 }
